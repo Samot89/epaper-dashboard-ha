@@ -1,0 +1,514 @@
+####################################################################
+# ESPHome konfigurace pro LaskaKit Live-7.5 E-paper dashboard
+# (ESPink v3.6, ESP32-S3, panel Good Display GDEY075T7, 800x480)
+#
+# Kompletní český + anglický návod: viz README.cs.md / README.md
+# v kořeni repozitáře.
+#
+# CO MUSÍŠ PŘED NAHRÁNÍM UPRAVIT (hledej "PŘIZPŮSOB" / "CUSTOMIZE"):
+#   - substitutions: entity_id senzorů z tvé Home Assistant instalace
+#   - esphome/secrets.yaml (zkopíruj ze secrets.yaml.example a doplň)
+#
+# Historie zajímavých bugů a jejich řešení je v README (sekce
+# "Troubleshooting / Časté problémy") - obsahuje mj. netriviální
+# ESPHome OTA rollback problém v kombinaci s deep_sleep.
+####################################################################
+
+substitutions:
+  device_name: "epaper-dashboard"
+  friendly_name: "E-paper Dashboard"
+
+  # --- PŘIZPŮSOB: entity_id ze své HA instalace ---
+  teplota_doma_entity: "sensor.nsblack_temperature"
+  spotreba_domu_entity: "sensor.power_total"
+  bojler_entity: "sensor.nejvyssi_teplota_horke_vody"
+  pretoky_entity: "sensor.pretoky_klouzavy_prumer_15min"
+  bazen_entity: "sensor.bazen_teplota_bazen"
+  denni_elektrina_nt_entity: "sensor.denni_elektrina_nt"
+  denni_elektrina_vt_entity: "sensor.denni_elektrina_vt"
+
+  # Volitelné: výstraha ČHMÚ (např. z HACS integrace poskytující
+  # sensor s atributem "severityLevel"). Pokud takový senzor nemáš,
+  # klidně smaž tuto substituci i odpovídající blok v lambdě displeje.
+  chmi_alert_entity: "sensor.chmi_alert"
+
+  # --- entita s CSV řetězcem hodinových cen (viz packages/ha_spot_price_template.yaml) ---
+  spot_prices_entity: "sensor.spotove_ceny_csv"
+  spot_price_unit: "Kč/kWh"   # uprav, pokud máš jiný cenový formát (EUR/MWh apod.)
+
+  # --- entita s CSV seznamem nadcházejících událostí (viz packages/ha_spot_price_template.yaml) ---
+  upcoming_events_entity: "sensor.nadchazejici_udalosti_csv"
+
+  # --- entita s CSV předpovědí počasí na 5 dní (viz packages/ha_spot_price_template.yaml) ---
+  weather_forecast_entity: "sensor.predpoved_pocasi_csv"
+
+  # --- entita se jménem dnešního svátku (např. HACS "Svátek dne" nebo vlastní template) ---
+  svatek_entity: "sensor.dnes_ma_svatek"
+
+  # --- interval buzení z hlubokého spánku - viz README, kapitola o baterii ---
+  sleep_duration: "10min"
+
+
+esphome:
+  name: epaper-dashboard
+  friendly_name: epaper-dashboard
+  min_version: 2024.11.0
+  name_add_mac_suffix: false
+  on_boot:
+    priority: -100
+    then:
+      - script.execute: update_and_sleep
+
+esp32:
+  board: esp32-s3-devkitc-1     # ESPink v3.6 = ESP32-S3 (NE klasický ESP32!)
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+logger:
+  level: WARN
+
+api:
+  encryption:
+    key: !secret api_encryption_key   # vygeneruj na https://esphome.io/encryption-key
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "epaper-dashboard Fallback Hotspot"
+    password: !secret ap_fallback_password
+  manual_ip:                        # PŘIZPŮSOB, nebo smaž a nech DHCP
+    static_ip: 192.168.1.143
+    gateway: 192.168.1.1
+    subnet: 255.255.255.0
+    dns1: 192.168.1.1
+
+captive_portal:
+
+# čas bereme z Home Assistanta
+time:
+  - platform: homeassistant
+    id: ha_time
+
+# I2C sběrnice pro senzor SHT40 (μŠup konektor) - ESPink v3.6: SDA=GPIO42, SCL=GPIO2
+i2c:
+  sda: 42
+  scl: 2
+
+# Napájení e-paper displeje (LDO RT9080 na desce ESPink v3.6, GPIO47, HIGH = zapnuto)
+switch:
+  - platform: gpio
+    pin: 47
+    id: epaper_power
+    restore_mode: ALWAYS_ON
+
+# Fonty z Google Fonts, s českou diakritikou (jinak se vykreslí prázdná místa).
+# Pokud výstraha/kalendář obsahuje jiný speciální znak, doplň ho i sem -
+# viz README, "Chybějící znak ve fontu (Codepoint not found)".
+font:
+  - file: "gfonts://Roboto"
+    id: font_vsmall
+    size: 14
+    glyphs: &cz_glyphs " !\"%'()+,-.–0123456789:°/AÁBCČDĎEÉĚFGHIÍJKLMNŇOÓPQRŘSŠTŤUÚŮVWXYÝZŽaábcčdďeéěfghiíjklmnňoópqrřsštťuúůvwxyýzž"
+  - file: "gfonts://Roboto"
+    id: font_normal
+    size: 20
+    glyphs: *cz_glyphs
+  - file: "gfonts://Roboto"
+    id: font_temp
+    size: 32
+    glyphs: *cz_glyphs
+
+sensor:
+  - platform: homeassistant
+    id: teplota_doma
+    entity_id: ${teplota_doma_entity}
+    internal: true
+  - platform: homeassistant
+    id: fve_spotreba_domu
+    entity_id: ${spotreba_domu_entity}
+    internal: true
+  - platform: homeassistant
+    id: pretoky_do_site
+    entity_id: ${pretoky_entity}
+    internal: true
+  - platform: homeassistant
+    id: bojler_teplota
+    entity_id: ${bojler_entity}
+    internal: true
+  - platform: homeassistant
+    id: bazen_teplota
+    entity_id: ${bazen_entity}
+    internal: true
+  - platform: homeassistant
+    id: denni_elektrina_nt
+    entity_id: ${denni_elektrina_nt_entity}
+    internal: true
+  - platform: homeassistant
+    id: denni_elektrina_vt
+    entity_id: ${denni_elektrina_vt_entity}
+    internal: true
+  - platform: homeassistant
+    id: chmi_alert_severity
+    entity_id: ${chmi_alert_entity}
+    attribute: "severityLevel"
+    internal: true
+
+  # Lokální senzor teploty/vlhkosti SHT40 ze stavebnice - update_interval
+  # je krátký (2s) záměrně, viz README "Deep sleep a časování senzorů".
+  - platform: sht4x
+    temperature:
+      name: "Teplota v místnosti"
+      id: room_temp
+    humidity:
+      name: "Vlhkost v místnosti"
+      id: room_humidity
+    address: 0x44
+    update_interval: 2s
+
+  # Měření napětí baterie panelu (dělič na desce ESPink v3.6, GPIO9).
+  # Konstanta "multiply" odpovídá děliči na konkrétní desce - pokud máš
+  # jiný, změř referenčním voltmetrem a přepočítej.
+  - platform: adc
+    pin: 9
+    name: "Baterie panelu"
+    id: battery_voltage
+    attenuation: auto
+    update_interval: 2s
+    filters:
+      - multiply: 1.769388
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+    entity_category: diagnostic
+
+text_sensor:
+  - platform: homeassistant
+    id: spot_prices_csv
+    entity_id: ${spot_prices_entity}
+    internal: true
+  - platform: homeassistant
+    id: upcoming_events_csv
+    entity_id: ${upcoming_events_entity}
+    internal: true
+  - platform: homeassistant
+    id: weather_forecast_csv
+    entity_id: ${weather_forecast_entity}
+    internal: true
+  - platform: homeassistant
+    id: svatek_dnes
+    entity_id: ${svatek_entity}
+    internal: true
+  # Text výstrahy ČHMÚ (zobrazí se jen když severityLevel > 0) - volitelné, viz výše.
+  - platform: homeassistant
+    id: chmi_alert_text
+    entity_id: ${chmi_alert_entity}
+    internal: true
+
+# SPI sběrnice a e-paper displej - piny podle ESPink v3.6 (ESP32-S3).
+# POZOR: cs_pin MUSÍ být 10 (primární "CS"), NE 18 ("CS2*" - volitelný
+# druhý chip-select jen pro dvoučipové varianty displeje). Viz README
+# "Prázdný displej bez chybové hlášky".
+spi:
+  clk_pin: 12
+  mosi_pin: 11
+
+display:
+  - platform: waveshare_epaper
+    id: epaper_displej
+    cs_pin: 10
+    dc_pin: 48
+    busy_pin:
+      number: 38
+      inverted: true          # POVINNÉ pro 7.50inv2, jinak hrozí poškození displeje
+    reset_pin: 45
+    model: 7.50inv2            # ovladač pro Good Display GDEY075T7 (LaskaKit Live-7.5)
+    rotation: 0
+    update_interval: never     # aktualizujeme ručně přes script (viz níže)
+
+    lambda: |-
+      it.fill(Color::WHITE);
+
+      // ============ ZÁHLAVÍ ============
+      it.print(20, 12, id(font_normal), Color::BLACK, "PŘEHLED DOMÁCNOSTI");
+      auto ted = id(ha_time).now();
+      std::string svatek = id(svatek_dnes).state;
+      std::string hlavicka_datum = std::string("%d.%m.%Y - Svátek: ") + svatek;
+      it.strftime(780, 15, id(font_normal), Color::BLACK, TextAlign::TOP_RIGHT, hlavicka_datum.c_str(), ted);
+
+      // Výstraha ČHMÚ - zobrazí se jen když je aktivní (severityLevel > 0),
+      // jinak zůstává tento řádek prázdný a nic dalšího se neposouvá.
+      // Pokud nemáš sensor.chmi_alert, smaž tento blok i substituci výše.
+      if (id(chmi_alert_severity).has_state() && id(chmi_alert_severity).state > 0) {
+        std::string alert_text = id(chmi_alert_text).state;
+        if (alert_text.length() > 90) alert_text = alert_text.substr(0, 90);
+        it.printf(20, 38, id(font_vsmall), Color::BLACK, "POZOR - výstraha ČHMÚ: %s", alert_text.c_str());
+      }
+
+      it.line(20, 55, 780, 55, Color::BLACK);
+
+      // ============ ŘÁDEK: TEPLOTA DOMA / SPOTŘEBA DOMU / BOJLER / PŘETOKY / BAZÉN (5 sloupců) ============
+      it.print(20, 58, id(font_normal), Color::BLACK, "Teplota doma");
+      if (id(teplota_doma).has_state()) {
+        it.printf(20, 88, id(font_temp), Color::BLACK, "%.1f °C", id(teplota_doma).state);
+      } else {
+        it.print(20, 88, id(font_temp), Color::BLACK, "--");
+      }
+
+      it.vertical_line(157, 58, 110, Color::BLACK);
+
+      it.print(172, 58, id(font_normal), Color::BLACK, "Spotřeba domu");
+      if (id(fve_spotreba_domu).has_state()) {
+        it.printf(172, 88, id(font_temp), Color::BLACK, "%.0f W", id(fve_spotreba_domu).state);
+      } else {
+        it.print(172, 88, id(font_temp), Color::BLACK, "--");
+      }
+      if (id(denni_elektrina_nt).has_state() && id(denni_elektrina_vt).has_state()) {
+        float spotreba_dnes = id(denni_elektrina_nt).state + id(denni_elektrina_vt).state;
+        it.printf(172, 126, id(font_vsmall), Color::BLACK, "%.1f kWh dnes", spotreba_dnes);
+      }
+
+      it.vertical_line(309, 58, 110, Color::BLACK);
+
+      it.print(324, 58, id(font_normal), Color::BLACK, "Bojler");
+      if (id(bojler_teplota).has_state()) {
+        it.printf(324, 88, id(font_temp), Color::BLACK, "%.0f °C", id(bojler_teplota).state);
+      } else {
+        it.print(324, 88, id(font_temp), Color::BLACK, "--");
+      }
+
+      it.vertical_line(461, 58, 110, Color::BLACK);
+
+      it.print(476, 58, id(font_normal), Color::BLACK, "Přetoky");
+      if (id(pretoky_do_site).has_state()) {
+        it.printf(476, 88, id(font_temp), Color::BLACK, "%.0f W", id(pretoky_do_site).state);
+      } else {
+        it.print(476, 88, id(font_temp), Color::BLACK, "--");
+      }
+
+      it.vertical_line(613, 58, 110, Color::BLACK);
+
+      it.print(628, 58, id(font_normal), Color::BLACK, "Bazén");
+      if (id(bazen_teplota).has_state()) {
+        it.printf(628, 88, id(font_temp), Color::BLACK, "%.1f °C", id(bazen_teplota).state);
+      } else {
+        it.print(628, 88, id(font_temp), Color::BLACK, "--");
+      }
+
+      it.line(20, 178, 780, 178, Color::BLACK);
+
+      // ============ GRAF SPOTOVÝCH CEN ============
+      it.printf(20, 184, id(font_normal), Color::BLACK, "Nákupní cena elektřiny dnes (%s)", "${spot_price_unit}");
+
+      float prices[24];
+      int price_count = 0;
+      {
+        std::string csv = id(spot_prices_csv).state;
+        size_t pos = 0;
+        while (pos <= csv.size() && price_count < 24) {
+          size_t comma = csv.find(',', pos);
+          std::string token = (comma == std::string::npos) ? csv.substr(pos) : csv.substr(pos, comma - pos);
+          if (token.length() > 0) {
+            prices[price_count++] = atof(token.c_str());
+          }
+          if (comma == std::string::npos) break;
+          pos = comma + 1;
+        }
+      }
+
+      const int chart_x = 60;
+      const int chart_y = 204;
+      const int chart_w = 700;
+      const int chart_h = 55;
+
+      if (price_count == 0) {
+        it.print(chart_x, chart_y + chart_h / 2 - 10, id(font_normal), Color::BLACK, "Data spotových cen nejsou k dispozici");
+      } else {
+        float p_min = prices[0], p_max = prices[0];
+        for (int i = 1; i < price_count; i++) {
+          if (prices[i] < p_min) p_min = prices[i];
+          if (prices[i] > p_max) p_max = prices[i];
+        }
+        float range = p_max - p_min;
+        if (range < 0.01f) range = 0.01f;
+
+        int zero_y = chart_y + chart_h - (int) (((0.0f - p_min) / range) * chart_h);
+        if (zero_y < chart_y) zero_y = chart_y;
+        if (zero_y > chart_y + chart_h) zero_y = chart_y + chart_h;
+
+        it.printf(chart_x - 4, chart_y + 2, id(font_vsmall), Color::BLACK, TextAlign::TOP_RIGHT, "%.2f", p_max);
+        it.printf(chart_x - 4, chart_y + chart_h - 2, id(font_vsmall), Color::BLACK, TextAlign::BOTTOM_RIGHT, "%.2f", p_min);
+
+        int bar_w = chart_w / price_count;
+        int current_hour = ted.hour;
+
+        for (int i = 0; i < price_count; i++) {
+          int bar_x = chart_x + i * bar_w;
+          int val_y = chart_y + chart_h - (int) (((prices[i] - p_min) / range) * chart_h);
+          int top = (val_y < zero_y) ? val_y : zero_y;
+          int bottom = (val_y < zero_y) ? zero_y : val_y;
+          int h = bottom - top;
+          if (h < 1) h = 1;
+
+          bool is_now = (i == current_hour);
+          if (is_now) {
+            it.filled_rectangle(bar_x + 1, top, bar_w - 2, h, Color::BLACK);
+          } else {
+            it.rectangle(bar_x + 1, top, bar_w - 2, h, Color::BLACK);
+          }
+
+          if (i % 3 == 0) {
+            it.printf(bar_x + bar_w / 2, chart_y + chart_h + 4, id(font_vsmall), Color::BLACK, TextAlign::TOP_CENTER, "%02d", i);
+          }
+        }
+
+        if (p_min < 0.0f) {
+          it.horizontal_line(chart_x, zero_y, chart_w, Color::BLACK);
+        }
+
+        if (current_hour >= 0 && current_hour < price_count) {
+          it.printf(780, 184, id(font_vsmall), Color::BLACK, TextAlign::TOP_RIGHT, "teď: %.2f %s", prices[current_hour], "${spot_price_unit}");
+        }
+      }
+
+      it.line(20, 282, 780, 282, Color::BLACK);
+
+      // ============ PŘEDPOVĚĎ POČASÍ NA 5 DNÍ ============
+      it.print(20, 286, id(font_normal), Color::BLACK, "Předpověď počasí");
+
+      const int MAX_DAYS = 5;
+      std::string wx_items[MAX_DAYS];
+      int wx_count = 0;
+      {
+        std::string raw = id(weather_forecast_csv).state;
+        size_t pos = 0;
+        while (pos <= raw.size() && wx_count < MAX_DAYS) {
+          size_t bar = raw.find('|', pos);
+          std::string token = (bar == std::string::npos) ? raw.substr(pos) : raw.substr(pos, bar - pos);
+          if (token.length() > 0) {
+            wx_items[wx_count++] = token;
+          }
+          if (bar == std::string::npos) break;
+          pos = bar + 1;
+        }
+      }
+
+      if (wx_count == 0) {
+        it.print(20, 330, id(font_vsmall), Color::BLACK, "Předpověď počasí není k dispozici");
+      } else {
+        const int wx_col_w = 760 / wx_count;
+        for (int i = 0; i < wx_count; i++) {
+          std::string item = wx_items[i];
+          std::string parts[4];
+          int part_i = 0;
+          size_t p = 0;
+          while (part_i < 4) {
+            size_t semi = item.find(';', p);
+            parts[part_i++] = (semi == std::string::npos) ? item.substr(p) : item.substr(p, semi - p);
+            if (semi == std::string::npos) break;
+            p = semi + 1;
+          }
+          int col_center = 20 + i * wx_col_w + wx_col_w / 2;
+          it.print(col_center, 308, id(font_normal), Color::BLACK, TextAlign::TOP_CENTER, parts[0].c_str());
+          it.print(col_center, 330, id(font_vsmall), Color::BLACK, TextAlign::TOP_CENTER, parts[1].c_str());
+          it.printf(col_center, 346, id(font_vsmall), Color::BLACK, TextAlign::TOP_CENTER, "%s° / %s°", parts[2].c_str(), parts[3].c_str());
+        }
+      }
+
+      it.line(20, 364, 780, 364, Color::BLACK);
+
+      // ============ NADCHÁZEJÍCÍ UDÁLOSTI (kalendáře) + PROVOZNÍ INFO ============
+      it.vertical_line(520, 370, 106, Color::BLACK);
+
+      const int MAX_EVENTS = 6;
+      std::string event_items[MAX_EVENTS];
+      int event_count = 0;
+      {
+        std::string raw = id(upcoming_events_csv).state;
+        size_t pos = 0;
+        while (pos <= raw.size() && event_count < MAX_EVENTS) {
+          size_t bar = raw.find('|', pos);
+          std::string token = (bar == std::string::npos) ? raw.substr(pos) : raw.substr(pos, bar - pos);
+          if (token.length() > 0) {
+            event_items[event_count++] = token;
+          }
+          if (bar == std::string::npos) break;
+          pos = bar + 1;
+        }
+      }
+
+      it.print(20, 370, id(font_normal), Color::BLACK, "Nadcházející události");
+      if (event_count == 0) {
+        it.print(20, 394, id(font_vsmall), Color::BLACK, "Žádné nadcházející události");
+      } else {
+        int line_y = 394;
+        for (int i = 0; i < event_count; i++) {
+          std::string item = event_items[i];
+          size_t semi = item.find(';');
+          std::string display = (semi != std::string::npos)
+              ? (item.substr(0, semi) + "  " + item.substr(semi + 1))
+              : item;
+          it.print(20, line_y, id(font_vsmall), Color::BLACK, display.c_str());
+          line_y += 14;
+        }
+      }
+
+      if (id(room_temp).has_state() && id(room_humidity).has_state()) {
+        it.printf(540, 376, id(font_normal), Color::BLACK, "%.1f °C / %.0f %%", id(room_temp).state, id(room_humidity).state);
+      } else {
+        it.print(540, 376, id(font_normal), Color::BLACK, "Pokojový senzor: --");
+      }
+
+      // Baterie: syrové napětí přepočítané na % po částech lineární
+      // aproximací vybíjecí křivky jednočlánkové Li-ion/LiPo baterie
+      // (4.2V=100 %, 3.7V nominál~40 %, 3.3V=0 %). Pokud máš jinou
+      // baterii (jiný počet článků), body si přepočítej.
+      float batt_v = id(battery_voltage).state;
+      float batt_pct;
+      if (batt_v >= 4.2f) {
+        batt_pct = 100.0f;
+      } else if (batt_v >= 4.1f) {
+        batt_pct = 90.0f + (batt_v - 4.1f) / (4.2f - 4.1f) * 10.0f;
+      } else if (batt_v >= 4.0f) {
+        batt_pct = 80.0f + (batt_v - 4.0f) / (4.1f - 4.0f) * 10.0f;
+      } else if (batt_v >= 3.9f) {
+        batt_pct = 65.0f + (batt_v - 3.9f) / (4.0f - 3.9f) * 15.0f;
+      } else if (batt_v >= 3.7f) {
+        batt_pct = 40.0f + (batt_v - 3.7f) / (3.9f - 3.7f) * 25.0f;
+      } else if (batt_v >= 3.5f) {
+        batt_pct = 10.0f + (batt_v - 3.5f) / (3.7f - 3.5f) * 30.0f;
+      } else if (batt_v >= 3.3f) {
+        batt_pct = (batt_v - 3.3f) / (3.5f - 3.3f) * 10.0f;
+      } else {
+        batt_pct = 0.0f;
+      }
+      it.printf(540, 408, id(font_normal), Color::BLACK, "Baterie: %.0f %% (%.2f V)", batt_pct, batt_v);
+      it.strftime(540, 440, id(font_vsmall), Color::BLACK, "aktualizováno %H:%M", ted);
+
+####################################################################
+# Sekvence probuzení: počkat na spojení s HA (aby senzory nebyly
+# prázdné), OZNAČIT BOOT ZA ÚSPĚŠNÝ (viz README - jinak hrozí OTA
+# rollback), aktualizovat displej, jít zpět spát.
+####################################################################
+script:
+  - id: update_and_sleep
+    then:
+      - switch.turn_on: epaper_power
+      - delay: 200ms
+      - wait_until:
+          condition:
+            api.connected:
+          timeout: 15s
+      - safe_mode.mark_successful
+      - delay: 3s
+      - component.update: epaper_displej
+      - delay: 6s
+      - deep_sleep.enter: deep_sleep_1
+
+deep_sleep:
+  id: deep_sleep_1
+  run_duration: 60s
+  sleep_duration: ${sleep_duration}

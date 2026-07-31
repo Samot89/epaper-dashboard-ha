@@ -1,0 +1,12 @@
+# Nikdy necommituj skutečné secrets.yaml (WiFi heslo, API klíč, ...)
+esphome/secrets.yaml
+**/secrets.yaml
+
+# ESPHome build cache
+.esphome/
+esphome/.esphome/
+
+# OS / editor smetí
+.DS_Store
+Thumbs.db
+*.swp

@@ -1,0 +1,138 @@
+####################################################################
+# Home Assistant konfigurace pro e-paper dashboard (packages/)
+#
+# Zkopíruj do /config/packages/ha_spot_price_template.yaml a v
+# configuration.yaml měj:
+#
+#   homeassistant:
+#     packages: !include_dir_named packages
+#
+# (POZOR: !include_dir_named NEREKURZUJE do podsložek - soubor musí
+# ležet přímo v packages/, ne v podadresáři.)
+#
+# Vytváří 3 senzory pro e-paper displej:
+#   1) sensor.spotove_ceny_csv        - 24 hodinových spotových cen (CSV)
+#   2) sensor.nadchazejici_udalosti_csv - nejbližší kalendářní události (CSV)
+#   3) sensor.predpoved_pocasi_csv    - předpověď počasí na 5 dní (CSV)
+#
+# PŘIZPŮSOB:
+#   - 'sensor.current_buy_electricity_price_15min' -> tvůj senzor spotových
+#     cen s hodinovými/15min atributy (např. z integrace Spot Price CZ).
+#   - seznam entity_id kalendářů níže (calendar.xxx).
+#   - 'weather.domov' -> tvoje weather entita.
+#
+# Známý problém: pokud weather.get_forecasts trvale hlásí
+# "Referenced entities X are missing or not currently available",
+# zkontroluj, jestli náhodou nemáš duplicitní/osiřelou weather entitu
+# (stejná integrace vytvořená 2x) - použij tu skutečně živou.
+####################################################################
+
+template:
+  - sensor:
+      - name: "Spotové ceny CSV"
+        unique_id: spot_prices_csv
+        icon: mdi:currency-eur
+        state: >
+          {% set source = 'sensor.current_buy_electricity_price_15min' %}
+          {% set ns = namespace(pairs=[]) %}
+          {% for key, value in states[source].attributes.items() %}
+            {% if key is string and ':' in key and '-' in key and key | length > 15 %}
+              {% set dt = as_datetime(key) %}
+              {% if dt is not none and as_local(dt).date() == now().date() %}
+                {% set ns.pairs = ns.pairs + [(as_local(dt).hour, value | float(0))] %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {% set ns2 = namespace(out=[]) %}
+          {% for h in range(0, 24) %}
+            {% set vals = ns.pairs | selectattr(0, 'eq', h) | map(attribute=1) | list %}
+            {% if vals | length > 0 %}
+              {% set ns2.out = ns2.out + [ (vals | sum / (vals | length)) | round(2) ] %}
+            {% else %}
+              {% set ns2.out = ns2.out + [0] %}
+            {% endif %}
+          {% endfor %}
+          {{ ns2.out | join(',') }}
+        attributes:
+          zdrojova_entita: "sensor.current_buy_electricity_price_15min"
+
+  # --- DRUHÝ SENZOR: nadcházející události (schůzky/narozeniny/svátky) ---
+  - trigger:
+      - trigger: time_pattern
+        minutes: "/15"
+      - trigger: homeassistant
+        event: start
+    action:
+      - action: calendar.get_events
+        target:
+          entity_id:
+            - calendar.narozeniny_2
+            - calendar.ceske_statni_svatky
+            - calendar.your_gmail_account   # PŘIZPŮSOB: tvůj Gmail/Google kalendář
+        data:
+          start_date_time: "{{ now() }}"
+          end_date_time: "{{ now() + timedelta(days=14) }}"
+        response_variable: cal_events
+    sensor:
+      - name: "Nadcházející události CSV"
+        unique_id: nadchazejici_udalosti_csv
+        icon: mdi:calendar-clock
+        state: >
+          {% set ns = namespace(items=[]) %}
+          {% for cal_id, cal_data in cal_events.items() %}
+            {% for ev in cal_data.events %}
+              {% set start_str = ev.start | string %}
+              {% set is_all_day = (start_str | length) <= 10 %}
+              {% set dt = as_datetime(start_str) %}
+              {% if dt is not none %}
+                {% set dt_local = as_local(dt) %}
+                {% set when = dt_local.strftime('%d.%m') ~ ('' if is_all_day else ' ' ~ dt_local.strftime('%H:%M')) %}
+                {% set entry = when ~ ';' ~ ev.summary[:35] %}
+                {% set ns.items = ns.items + [(dt_local, entry)] %}
+              {% endif %}
+            {% endfor %}
+          {% endfor %}
+          {% set sorted_items = ns.items | sort(attribute=0) %}
+          {% set ns2 = namespace(out=[]) %}
+          {% for item in sorted_items[:6] %}
+            {% set ns2.out = ns2.out + [item[1]] %}
+          {% endfor %}
+          {{ ns2.out | join('|') }}
+
+  # --- TŘETÍ SENZOR: předpověď počasí na 5 dní ---
+  - trigger:
+      - trigger: time_pattern
+        minutes: "/15"
+      - trigger: homeassistant
+        event: start
+    action:
+      - action: weather.get_forecasts
+        target:
+          entity_id: weather.domov
+        data:
+          type: daily
+        response_variable: wx
+    sensor:
+      - name: "Předpověď počasí CSV"
+        unique_id: predpoved_pocasi_csv
+        icon: mdi:weather-partly-cloudy
+        state: >
+          {% set dny_cz = ['Po', 'Út', 'St', 'Čt', 'Pá', 'So', 'Ne'] %}
+          {% set cond_map = {
+            'sunny': 'Slunečno', 'clear-night': 'Jasno', 'partlycloudy': 'Polojasno',
+            'cloudy': 'Zataženo', 'fog': 'Mlha', 'rainy': 'Déšť', 'pouring': 'Liják',
+            'snowy': 'Sníh', 'snowy-rainy': 'Déšť/sníh', 'lightning': 'Bouřka',
+            'lightning-rainy': 'Bouřky', 'hail': 'Kroupy', 'windy': 'Vítr',
+            'windy-variant': 'Vítr', 'exceptional': 'Výjimečné'
+          } %}
+          {% set forecast = wx['weather.domov'].forecast[:5] %}
+          {% set ns = namespace(out=[]) %}
+          {% for day in forecast %}
+            {% set dt = as_datetime(day.datetime) %}
+            {% set den = dny_cz[dt.weekday()] if dt is not none else '?' %}
+            {% set stav = cond_map.get(day.condition, day.condition) %}
+            {% set tmax = (day.temperature | round(0) | int) if day.temperature is not none else '' %}
+            {% set tmin = (day.templow | round(0) | int) if day.templow is not none else '' %}
+            {% set ns.out = ns.out + [den ~ ';' ~ stav ~ ';' ~ tmax ~ ';' ~ tmin] %}
+          {% endfor %}
+          {{ ns.out | join('|') }}
