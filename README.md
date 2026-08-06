@@ -205,6 +205,47 @@ longer interferes with a deliberately short wake cycle. After this
 fix, we verified hundreds of clean ~10-minute cycles on real hardware
 with zero anomalies.
 
+### Display shows blank or stale values after waking up
+Two related but distinct problems around `homeassistant` sensors and
+text_sensors having no value (`has_state() == false`) right after waking
+from `deep_sleep`, until Home Assistant re-pushes the state over the
+connection - `deep_sleep` is a full reset for the ESP32, so RAM (and any
+previously received value) is wiped.
+
+**1) Missing entirely - "--" instead of a value.** Without caching, the
+result was a blank "--", even if HA sent the value just a few seconds
+after the display had already redrawn. **Fix:** every such value is
+saved, immediately on receipt, into a `globals` variable with
+`restore_value: yes` (survives `deep_sleep` via flash/RTC preferences),
+and rendering always uses this cache - if a fresh update arrived, the
+cache is overwritten with it; if not, the last known value stays. "--"
+now only appears on the very first boot ever, before any value has
+arrived at all. Numeric values are cached as `float` with `NAN` as the
+"never arrived" sentinel; text (CSV strings) as fixed `char[]` arrays -
+`std::string` with `restore_value` would only safely persist the
+pointer, not the content, because the `restore_value` mechanism copies a
+fixed number of bytes and doesn't know about heap indirection.
+
+**2) Why the value sometimes didn't arrive at all, even outside
+`deep_sleep`.** `wait_until: api.connected` only confirms an established
+(encrypted) API connection between the ESP32 and HA - it says nothing
+about whether HA has already pushed the current entity states back. That
+is a second step: after the handshake, ESPHome sends HA a subscribe
+request, and only then does HA push a value back for each entity. The
+original `delay: 3s` between `api.connected` and `component.update`
+often wasn't enough for this push - especially when the display's wake
+cycle happened to coincide with the trigger-based templates in
+`packages/ha_spot_price_template.yaml` recalculating (they run every 15
+minutes and call the slower `calendar.get_events`/`weather.get_forecasts`),
+or under weaker WiFi signal. **Fix:** the delay between `api.connected`
+and `component.update` was extended from 3s to 6s (more headroom for
+HA), and the following delay shortened from 6s to 3s, so the overall wake
+budget stays within `run_duration` (60s).
+
+The two fixes complement each other - the cache (1) is a safety net for
+the residual case where even the extended window (2) isn't enough (WiFi
+drop, HA restart, HA under load).
+
 ## Extending
 
 - **Solar (PV) production:** substitutions and a column slot for solar

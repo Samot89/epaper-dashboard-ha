@@ -106,6 +106,68 @@ switch:
     id: epaper_power
     restore_mode: ALWAYS_ON
 
+# Cache posledních platných hodnot, která přežije deep_sleep - viz README
+# "Displej po probuzení občas ukáže prázdné hodnoty". Číselné hodnoty jako
+# float s restore_value (NaN = "ještě nikdy nedorazila žádná hodnota"),
+# texty jako pevná char[] pole (std::string s restore_value by ukládal jen
+# ukazatel, ne obsah - proto to takhle nejde udělat přímo se std::string).
+globals:
+  - id: g_teplota_doma
+    type: float
+    restore_value: yes
+    initial_value: 'NAN'
+  - id: g_spotreba_domu
+    type: float
+    restore_value: yes
+    initial_value: 'NAN'
+  - id: g_bojler_teplota
+    type: float
+    restore_value: yes
+    initial_value: 'NAN'
+  - id: g_pretoky
+    type: float
+    restore_value: yes
+    initial_value: 'NAN'
+  - id: g_bazen_teplota
+    type: float
+    restore_value: yes
+    initial_value: 'NAN'
+  - id: g_denni_elektrina_nt
+    type: float
+    restore_value: yes
+    initial_value: 'NAN'
+  - id: g_denni_elektrina_vt
+    type: float
+    restore_value: yes
+    initial_value: 'NAN'
+  - id: g_room_temp
+    type: float
+    restore_value: yes
+    initial_value: 'NAN'
+  - id: g_room_humidity
+    type: float
+    restore_value: yes
+    initial_value: 'NAN'
+  - id: g_chmi_severity
+    type: float
+    restore_value: yes
+    initial_value: 'NAN'
+  - id: g_spot_prices_csv
+    type: char[200]
+    restore_value: yes
+  - id: g_weather_forecast_csv
+    type: char[160]
+    restore_value: yes
+  - id: g_upcoming_events_csv
+    type: char[360]
+    restore_value: yes
+  - id: g_svatek_dnes
+    type: char[40]
+    restore_value: yes
+  - id: g_chmi_alert_text
+    type: char[100]
+    restore_value: yes
+
 # Fonty z Google Fonts, s českou diakritikou (jinak se vykreslí prázdná místa).
 # Pokud výstraha/kalendář obsahuje jiný speciální znak, doplň ho i sem -
 # viz README, "Chybějící znak ve fontu (Codepoint not found)".
@@ -235,65 +297,84 @@ display:
       // ============ ZÁHLAVÍ ============
       it.print(20, 12, id(font_normal), Color::BLACK, "PŘEHLED DOMÁCNOSTI");
       auto ted = id(ha_time).now();
-      std::string svatek = id(svatek_dnes).state;
+
+      // Svátek - hodnota se cachuje do "globals" (viz výše), ať po
+      // výpadku HA zůstane poslední známá místo prázdna.
+      if (id(svatek_dnes).has_state()) {
+        strncpy(id(g_svatek_dnes), id(svatek_dnes).state.c_str(), 39);
+        id(g_svatek_dnes)[39] = '\0';
+      }
+      std::string svatek = std::string(id(g_svatek_dnes));
       std::string hlavicka_datum = std::string("%d.%m.%Y - Svátek: ") + svatek;
       it.strftime(780, 15, id(font_normal), Color::BLACK, TextAlign::TOP_RIGHT, hlavicka_datum.c_str(), ted);
 
       // Výstraha ČHMÚ - zobrazí se jen když je aktivní (severityLevel > 0),
       // jinak zůstává tento řádek prázdný a nic dalšího se neposouvá.
       // Pokud nemáš sensor.chmi_alert, smaž tento blok i substituci výše.
-      if (id(chmi_alert_severity).has_state() && id(chmi_alert_severity).state > 0) {
-        std::string alert_text = id(chmi_alert_text).state;
-        if (alert_text.length() > 90) alert_text = alert_text.substr(0, 90);
-        it.printf(20, 38, id(font_vsmall), Color::BLACK, "POZOR - výstraha ČHMÚ: %s", alert_text.c_str());
+      if (id(chmi_alert_severity).has_state()) {
+        id(g_chmi_severity) = id(chmi_alert_severity).state;
+      }
+      if (id(chmi_alert_text).has_state()) {
+        strncpy(id(g_chmi_alert_text), id(chmi_alert_text).state.c_str(), 99);
+        id(g_chmi_alert_text)[99] = '\0';
+      }
+      if (!std::isnan(id(g_chmi_severity)) && id(g_chmi_severity) > 0) {
+        it.printf(20, 38, id(font_vsmall), Color::BLACK, "POZOR - výstraha ČHMÚ: %s", id(g_chmi_alert_text));
       }
 
       it.line(20, 55, 780, 55, Color::BLACK);
 
       // ============ ŘÁDEK: TEPLOTA DOMA / SPOTŘEBA DOMU / BOJLER / PŘETOKY / BAZÉN (5 sloupců) ============
+      if (id(teplota_doma).has_state()) { id(g_teplota_doma) = id(teplota_doma).state; }
       it.print(20, 58, id(font_normal), Color::BLACK, "Teplota doma");
-      if (id(teplota_doma).has_state()) {
-        it.printf(20, 88, id(font_temp), Color::BLACK, "%.1f °C", id(teplota_doma).state);
+      if (!std::isnan(id(g_teplota_doma))) {
+        it.printf(20, 88, id(font_temp), Color::BLACK, "%.1f °C", id(g_teplota_doma));
       } else {
         it.print(20, 88, id(font_temp), Color::BLACK, "--");
       }
 
       it.vertical_line(157, 58, 110, Color::BLACK);
 
+      if (id(fve_spotreba_domu).has_state()) { id(g_spotreba_domu) = id(fve_spotreba_domu).state; }
       it.print(172, 58, id(font_normal), Color::BLACK, "Spotřeba domu");
-      if (id(fve_spotreba_domu).has_state()) {
-        it.printf(172, 88, id(font_temp), Color::BLACK, "%.0f W", id(fve_spotreba_domu).state);
+      if (!std::isnan(id(g_spotreba_domu))) {
+        it.printf(172, 88, id(font_temp), Color::BLACK, "%.0f W", id(g_spotreba_domu));
       } else {
         it.print(172, 88, id(font_temp), Color::BLACK, "--");
       }
-      if (id(denni_elektrina_nt).has_state() && id(denni_elektrina_vt).has_state()) {
-        float spotreba_dnes = id(denni_elektrina_nt).state + id(denni_elektrina_vt).state;
+      if (id(denni_elektrina_nt).has_state()) { id(g_denni_elektrina_nt) = id(denni_elektrina_nt).state; }
+      if (id(denni_elektrina_vt).has_state()) { id(g_denni_elektrina_vt) = id(denni_elektrina_vt).state; }
+      if (!std::isnan(id(g_denni_elektrina_nt)) && !std::isnan(id(g_denni_elektrina_vt))) {
+        float spotreba_dnes = id(g_denni_elektrina_nt) + id(g_denni_elektrina_vt);
         it.printf(172, 126, id(font_vsmall), Color::BLACK, "%.1f kWh dnes", spotreba_dnes);
       }
 
       it.vertical_line(309, 58, 110, Color::BLACK);
 
+      if (id(bojler_teplota).has_state()) { id(g_bojler_teplota) = id(bojler_teplota).state; }
       it.print(324, 58, id(font_normal), Color::BLACK, "Bojler");
-      if (id(bojler_teplota).has_state()) {
-        it.printf(324, 88, id(font_temp), Color::BLACK, "%.0f °C", id(bojler_teplota).state);
+      if (!std::isnan(id(g_bojler_teplota))) {
+        it.printf(324, 88, id(font_temp), Color::BLACK, "%.0f °C", id(g_bojler_teplota));
       } else {
         it.print(324, 88, id(font_temp), Color::BLACK, "--");
       }
 
       it.vertical_line(461, 58, 110, Color::BLACK);
 
+      if (id(pretoky_do_site).has_state()) { id(g_pretoky) = id(pretoky_do_site).state; }
       it.print(476, 58, id(font_normal), Color::BLACK, "Přetoky");
-      if (id(pretoky_do_site).has_state()) {
-        it.printf(476, 88, id(font_temp), Color::BLACK, "%.0f W", id(pretoky_do_site).state);
+      if (!std::isnan(id(g_pretoky))) {
+        it.printf(476, 88, id(font_temp), Color::BLACK, "%.0f W", id(g_pretoky));
       } else {
         it.print(476, 88, id(font_temp), Color::BLACK, "--");
       }
 
       it.vertical_line(613, 58, 110, Color::BLACK);
 
+      if (id(bazen_teplota).has_state()) { id(g_bazen_teplota) = id(bazen_teplota).state; }
       it.print(628, 58, id(font_normal), Color::BLACK, "Bazén");
-      if (id(bazen_teplota).has_state()) {
-        it.printf(628, 88, id(font_temp), Color::BLACK, "%.1f °C", id(bazen_teplota).state);
+      if (!std::isnan(id(g_bazen_teplota))) {
+        it.printf(628, 88, id(font_temp), Color::BLACK, "%.1f °C", id(g_bazen_teplota));
       } else {
         it.print(628, 88, id(font_temp), Color::BLACK, "--");
       }
@@ -303,10 +384,14 @@ display:
       // ============ GRAF SPOTOVÝCH CEN ============
       it.printf(20, 184, id(font_normal), Color::BLACK, "Nákupní cena elektřiny dnes (%s)", "${spot_price_unit}");
 
+      if (id(spot_prices_csv).has_state()) {
+        strncpy(id(g_spot_prices_csv), id(spot_prices_csv).state.c_str(), 199);
+        id(g_spot_prices_csv)[199] = '\0';
+      }
       float prices[24];
       int price_count = 0;
       {
-        std::string csv = id(spot_prices_csv).state;
+        std::string csv = std::string(id(g_spot_prices_csv));
         size_t pos = 0;
         while (pos <= csv.size() && price_count < 24) {
           size_t comma = csv.find(',', pos);
@@ -379,11 +464,15 @@ display:
       // ============ PŘEDPOVĚĎ POČASÍ NA 5 DNÍ ============
       it.print(20, 286, id(font_normal), Color::BLACK, "Předpověď počasí");
 
+      if (id(weather_forecast_csv).has_state()) {
+        strncpy(id(g_weather_forecast_csv), id(weather_forecast_csv).state.c_str(), 159);
+        id(g_weather_forecast_csv)[159] = '\0';
+      }
       const int MAX_DAYS = 5;
       std::string wx_items[MAX_DAYS];
       int wx_count = 0;
       {
-        std::string raw = id(weather_forecast_csv).state;
+        std::string raw = std::string(id(g_weather_forecast_csv));
         size_t pos = 0;
         while (pos <= raw.size() && wx_count < MAX_DAYS) {
           size_t bar = raw.find('|', pos);
@@ -423,11 +512,15 @@ display:
       // ============ NADCHÁZEJÍCÍ UDÁLOSTI (kalendáře) + PROVOZNÍ INFO ============
       it.vertical_line(520, 370, 106, Color::BLACK);
 
+      if (id(upcoming_events_csv).has_state()) {
+        strncpy(id(g_upcoming_events_csv), id(upcoming_events_csv).state.c_str(), 359);
+        id(g_upcoming_events_csv)[359] = '\0';
+      }
       const int MAX_EVENTS = 6;
       std::string event_items[MAX_EVENTS];
       int event_count = 0;
       {
-        std::string raw = id(upcoming_events_csv).state;
+        std::string raw = std::string(id(g_upcoming_events_csv));
         size_t pos = 0;
         while (pos <= raw.size() && event_count < MAX_EVENTS) {
           size_t bar = raw.find('|', pos);
@@ -456,8 +549,10 @@ display:
         }
       }
 
-      if (id(room_temp).has_state() && id(room_humidity).has_state()) {
-        it.printf(540, 376, id(font_normal), Color::BLACK, "%.1f °C / %.0f %%", id(room_temp).state, id(room_humidity).state);
+      if (id(room_temp).has_state()) { id(g_room_temp) = id(room_temp).state; }
+      if (id(room_humidity).has_state()) { id(g_room_humidity) = id(room_humidity).state; }
+      if (!std::isnan(id(g_room_temp)) && !std::isnan(id(g_room_humidity))) {
+        it.printf(540, 376, id(font_normal), Color::BLACK, "%.1f °C / %.0f %%", id(g_room_temp), id(g_room_humidity));
       } else {
         it.print(540, 376, id(font_normal), Color::BLACK, "Pokojový senzor: --");
       }
@@ -465,7 +560,9 @@ display:
       // Baterie: syrové napětí přepočítané na % po částech lineární
       // aproximací vybíjecí křivky jednočlánkové Li-ion/LiPo baterie
       // (4.2V=100 %, 3.7V nominál~40 %, 3.3V=0 %). Pokud máš jinou
-      // baterii (jiný počet článků), body si přepočítej.
+      // baterii (jiný počet článků), body si přepočítej. Lokální ADC
+      // senzor, cachování nepotřebuje - čte se z hardwaru znovu při
+      // každém probuzení.
       float batt_v = id(battery_voltage).state;
       float batt_pct;
       if (batt_v >= 4.2f) {
@@ -492,6 +589,12 @@ display:
 # Sekvence probuzení: počkat na spojení s HA (aby senzory nebyly
 # prázdné), OZNAČIT BOOT ZA ÚSPĚŠNÝ (viz README - jinak hrozí OTA
 # rollback), aktualizovat displej, jít zpět spát.
+#
+# Delay 6s/3s: "api.connected" potvrzuje jen navázané API spojení,
+# NE že HA už poslal aktuální hodnoty entit zpět (to je až druhý krok
+# po handshaku). 6s dává víc prostoru na doručení všech "homeassistant"
+# senzorů/text_senzorů před vykreslením - viz README "Displej po
+# probuzení občas ukáže prázdné/neaktuální hodnoty".
 ####################################################################
 script:
   - id: update_and_sleep
@@ -503,9 +606,9 @@ script:
             api.connected:
           timeout: 15s
       - safe_mode.mark_successful
-      - delay: 3s
-      - component.update: epaper_displej
       - delay: 6s
+      - component.update: epaper_displej
+      - delay: 3s
       - deep_sleep.enter: deep_sleep_1
 
 deep_sleep:

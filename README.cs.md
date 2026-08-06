@@ -193,6 +193,45 @@ výchozí 1minutové lhůtě, a rollback ochrana přestane bránit tvému
 záměrnému krátkému probuzení. Po opravě jsme na reálném hardwaru
 ověřili stovky čistých ~10minutových cyklů bez jediné anomálie.
 
+### Displej po probuzení občas ukáže prázdné/neaktuální hodnoty
+Dva různé, ale příbuzné problémy kolem toho, že `homeassistant` senzory a
+text_senzory po probuzení z `deep_sleep` nemají žádnou hodnotu
+(`has_state() == false`), dokud ji HA znovu nepošle po připojení -
+`deep_sleep` je pro ESP32 plný reset, RAM (a tedy i poslední přijatá
+hodnota) se maže.
+
+**1) Chybí úplně - "--" místo hodnoty.** Bez cache byl výsledek prázdný
+"--", i když HA hodnotu poslal jen o pár sekund později, než se displej
+stihl vykreslit. **Řešení:** každá taková hodnota se hned po přijetí
+uloží do `globals` proměnné s `restore_value: yes` (přežije `deep_sleep`
+přes flash/RTC preference) a při vykreslení se vždy použije tahle cache
+- pokud aktuální update dorazil, cache se přepíše čerstvou hodnotou;
+pokud ne, zůstane poslední známá. "--" se teď zobrazí jen při úplně
+prvním bootu, kdy ještě žádná hodnota nikdy nedorazila. Číselné hodnoty
+jsou cachované jako `float` s `NAN` jako sentinel "ještě nikdy
+nedorazilo", texty (CSV řetězce) jako pevná `char[]` pole - `std::string`
+s `restore_value` by bezpečně uložil jen ukazatel, ne obsah, protože
+mechanismus `restore_value` kopíruje jen pevný počet bajtů a nerozumí
+heap indirekci.
+
+**2) Proč se to nedoručení dělo i mimo `deep_sleep`.** `wait_until:
+api.connected` potvrzuje jen navázané (zašifrované) API spojení mezi
+ESP32 a HA - vůbec neříká, že HA už poslal aktuální hodnoty entit zpět.
+To je až druhý krok: po handshaku ESPHome pošle HA požadavek na odběr
+stavů a HA teprve pak zpětně pošle hodnotu pro každou entitu. Původní
+`delay: 3s` mezi `api.connected` a `component.update` na tenhle zpětný
+push často nestačil - hlavně když se probuzení displeje časově potkalo
+s přepočtem trigger-based šablon v
+`packages/ha_spot_price_template.yaml` (běží každých 15 min, volají
+pomalejší `calendar.get_events`/`weather.get_forecasts`), nebo při
+slabším WiFi signálu. **Řešení:** prodloužen delay mezi `api.connected`
+a `component.update` z 3s na 6s (víc prostoru pro HA), následný delay
+zkrácen ze 6s na 3s, aby celkový budget probuzení zůstal v mezích
+`run_duration` (60s).
+
+Obě opravy se doplňují - cache (1) je pojistka pro zbytkový případ, kdy
+i prodloužené okno (2) nestačí (výpadek WiFi, restart HA, vytížení).
+
 ## Rozšíření
 
 - **FVE (fotovoltaika):** substituce a sloupec pro výrobu/baterii FVE
