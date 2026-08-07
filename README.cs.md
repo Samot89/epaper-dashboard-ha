@@ -13,6 +13,8 @@ sekund každých ~10 minut, aby překreslilo displej a šlo zpět spát - na
 jedno nabití baterie tak vydrží týdny až měsíce (podle kapacity baterie
 a zvoleného intervalu probouzení).
 
+![E-paper dashboard v provozu na reálném hardwaru](docs/images/dashboard-photo.jpg)
+
 ## Hardware
 
 - **[LaskaKit Live-7.5](https://www.laskakit.cz/laskakit-live-7-5-e-paper-stavebnice-s-wifi-pro---zivy-obraz-/?variantId=13529)**

@@ -14,6 +14,8 @@ The device runs in `deep_sleep`, waking for only a few seconds every
 battery charge should last weeks to months, depending on battery
 capacity and the chosen wake interval.
 
+![E-paper dashboard running on real hardware](docs/images/dashboard-photo.jpg)
+
 ## Hardware
 
 - **[LaskaKit Live-7.5](https://www.laskakit.cz/laskakit-live-7-5-e-paper-stavebnice-s-wifi-pro---zivy-obraz-/?variantId=13529)**
