@@ -245,6 +245,14 @@ i prodloužené okno (2) nestačí (výpadek WiFi, restart HA, vytížení).
   hodnoty musí sedět, jinak displej dostane oříznutá data bez ohledu
   na to, kolik řádků má místo zobrazit.
 
+## ☕ Podpora
+
+Pokud se ti projekt líbí a pomohl ti, můžeš mi přispět na kafe:
+
+[![Kup mi kafe přes PayPal](https://img.shields.io/badge/PayPal-Kup%20mi%20kafe%20%E2%98%95-00457C?logo=paypal&logoColor=white)](https://paypal.me/sulc89)
+
+Díky! Příspěvek je dobrovolný, projekt zůstává zdarma.
+
 ## Licence
 
 MIT, viz [LICENSE](LICENSE). Displej ani firmware nejsou oficiální

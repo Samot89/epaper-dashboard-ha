@@ -259,6 +259,14 @@ drop, HA restart, HA under load).
   both must match, or the display will receive truncated data
   regardless of how many rows it has room to show.
 
+## ☕ Support
+
+If you like this project and it helped you, you can buy me a coffee:
+
+[![Buy me a coffee via PayPal](https://img.shields.io/badge/PayPal-Buy%20me%20a%20coffee%20%E2%98%95-00457C?logo=paypal&logoColor=white)](https://paypal.me/sulc89)
+
+Thank you! Donations are voluntary, the project stays free.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). The display and firmware are not an
